@@ -1,49 +1,78 @@
 # Description:
-#   send all of the messages on Slack in #timeline
+#   send all of the messages on Mattermost in #timeline
 #
 # Configuration:
-#   create #timeline channel on your Slack team
+#   create #timeline channel on your Mattermost team
 #
 # Notes:
 #   None
 #
 # Author:
-#   vexus2
+#   maruTA-bis5
 
-request = require 'request'
 module.exports = (robot) ->
   robot.hear /.*?/i, (msg) ->
-    channel = msg.envelope.room
-    message = msg.message.text
-    username = msg.message.user.name
+    if msg.envelope.room == 'cpgjs5znmfr7mxhcrae655t7jw'
+      return
+
     user_id = msg.message.user.id
-    reloadUserImages(robot, user_id)
-    user_image = robot.brain.data.userImages[user_id]
-    if message.length > 0
-      message = encodeURIComponent(message)
-      link_names = if process.env.SLACK_LINK_NAMES then process.env.SLACK_LINK_NAMES else 0
-      timeline_channel = if process.env.SLACK_TIMELINE_CHANNEL then process.env.SLACK_TIMELINE_CHANNEL else 'timeline'
-      request = msg.http("https://slack.com/api/chat.postMessage?token=#{process.env.SLACK_API_TOKEN}&channel=%23#{timeline_channel}&text=#{message}%20(at%20%23#{channel}%20)&username=#{username}&link_names=#{link_names}&pretty=1&icon_url=#{user_image}").get()
-      request (err, res, body) ->
+    channel_id = msg.envelope.room
+    requestChannelName(robot, channel_id)
+    #console.log robot.brain.data
+    if robot.brain.data.channelName[channel_id]
+      channelName = robot.brain.data.channelName[channel_id]
+    else 
+      channelName = channel_id
+    payload = JSON.stringify({
+      text: msg.message.text
+      username: msg.message.user.name + ' (at #' + channelName + ')'
+      icon_url: process.env.MATTERMOST_URL + '/api/v1/users/' + user_id + '/image'
+      channel: 'timeline'
+    })
 
-  reloadUserImages = (robot, user_id) ->
-    robot.brain.data.userImages = {} if !robot.brain.data.userImages
-    robot.brain.data.userImages[user_id] = "" if !robot.brain.data.userImages[user_id]?
+    hookUrl = process.env.MATTERMOST_TIMELINE_WEBHOOK
+    request = robot.http(hookUrl)
+      .header('Content-Type', 'application/json')
+      .post(payload) (err, res, body) ->
+        console.log body
 
-    return if robot.brain.data.userImages[user_id] != ""
-    options =
-      url: "https://slack.com/api/users.list?token=#{process.env.SLACK_API_TOKEN}&pretty=1"
-      timeout: 2000
-      headers: {}
 
-    request options, (error, response, body) ->
-      json = JSON.parse body
-      i = 0
-      len = json.members.length
+  requestChannelName = (robot, channelId) ->
+    robot.brain.data.channelName = {} if !robot.brain.data.channelName
+    robot.brain.data.channelName[channelId] = "" if !robot.brain.data.channelName[channelId]
+    robot.brain.save
 
-      while i < len
-        image = json.members[i].profile.image_48
-        robot.brain.data.userImages[json.members[i].id] = image
-        ++i
+    loginUrl = process.env.MATTERMOST_URL + '/api/v1/users/login'
+    loginData = JSON.stringify({
+      name: process.env.MATTERMOST_TIMELINE_TEAM
+      email: process.env.MATTERMOST_TIMELINE_EMAIL
+      password: process.env.MATTERMOST_TIMELINE_PASSWORD
+    })
 
+    loginRequest = robot.http(loginUrl)
+    loginRequest.post(loginData) (loginErr, loginRes, loginBody) ->
+      #console.log loginRes.headers
+      if !loginRes.headers['token']
+        return
+      token = loginRes.headers['token']
+      
+      channelUrl = process.env.MATTERMOST_URL + '/api/v1/channels/'
+      channelRequest = robot.http(channelUrl)
+      channelRequest.header('Authorization', "Bearer " + token)
+        .get() (chErr, chRes, chBody) ->
+          #console.log chBody
+          if chErr
+            return
+          channelJson = JSON.parse chBody
+          channels = channelJson.channels
+          i = 0
+          len = channels.length
+
+          while i < len
+            channel = channels[i]
+            id = channel.id
+            name = channel.display_name
+            robot.brain.data.channelName[id] = name
+            robot.brain.save
+            i++
 
